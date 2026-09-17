@@ -1,7 +1,12 @@
 """FastAPI application entry point."""
 
+import os
+from pathlib import Path
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from starlette.responses import JSONResponse
 
 from app.database import init_db
@@ -26,17 +31,35 @@ app.include_router(auth_router)
 app.include_router(articles_router)
 app.include_router(tags_router)
 
-# CORS — allow frontend dev server (add your production domain here)
+# CORS — allow frontend dev server + production
+_ALLOWED_ORIGINS = os.environ.get(
+    "CORS_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173",
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ---------------------------------------------------------------------------
+# Serve frontend static files (production)
+# ---------------------------------------------------------------------------
+_FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+
+if _FRONTEND_DIST.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIST / "assets")), name="static")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        """Serve index.html for all non-API routes (SPA fallback)."""
+        file = _FRONTEND_DIST / full_path
+        if file.is_file():
+            return FileResponse(str(file))
+        return FileResponse(str(_FRONTEND_DIST / "index.html"))
 
 
 # ---------------------------------------------------------------------------
