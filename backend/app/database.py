@@ -34,11 +34,9 @@ def get_db():
 
 
 def init_db():
-    """Create all tables (ORM + FTS5 virtual table) on application startup."""
+    """Create all tables (ORM + FTS5 virtual table + settings) on application startup."""
     Base.metadata.create_all(bind=engine)
 
-    # Create FTS5 virtual table for full-text search.
-    # Standalone table (no content= link) so we can store jieba-pre-tokenized text.
     with engine.connect() as conn:
         # Drop old triggers if they exist (from previous schema with content= link)
         conn.execute(text("DROP TRIGGER IF EXISTS articles_fts_ai"))
@@ -61,11 +59,50 @@ def init_db():
             CREATE VIRTUAL TABLE IF NOT EXISTS articles_fts
             USING fts5(title, content, summary)
         """))
+
+        # Settings table for auth (key-value store)
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """))
         conn.commit()
 
     # Re-index all articles if schema was migrated
     if needs_rebuild:
         _rebuild_fts_index()
+
+    # Initialize default admin account if settings table is empty
+    _init_default_admin()
+
+
+def _init_default_admin():
+    """Create default admin account if no auth settings exist yet."""
+    from app.auth import hash_password
+
+    db = SessionLocal()
+    try:
+        row = db.execute(
+            text("SELECT value FROM app_settings WHERE key = 'admin_username'")
+        ).fetchone()
+        if row is None:
+            hashed, salt = hash_password("admin123456")
+            db.execute(
+                text("INSERT INTO app_settings (key, value) VALUES (:k, :v)"),
+                {"k": "admin_username", "v": "admin"},
+            )
+            db.execute(
+                text("INSERT INTO app_settings (key, value) VALUES (:k, :v)"),
+                {"k": "admin_password_hash", "v": hashed},
+            )
+            db.execute(
+                text("INSERT INTO app_settings (key, value) VALUES (:k, :v)"),
+                {"k": "admin_salt", "v": salt},
+            )
+            db.commit()
+    finally:
+        db.close()
 
 
 def _rebuild_fts_index():

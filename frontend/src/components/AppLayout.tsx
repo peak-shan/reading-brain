@@ -1,11 +1,18 @@
-import { Layout, Menu } from "antd";
+import { useState } from "react";
+import { Layout, Menu, Button, Dropdown } from "antd";
 import {
   BookOutlined,
   PlusCircleOutlined,
   TagsOutlined,
   HomeOutlined,
+  UserOutlined,
+  LogoutOutlined,
+  LockOutlined,
 } from "@ant-design/icons";
+import type { MenuProps } from "antd";
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
+import { clearToken, getStoredUsername } from "../services/api";
+import ChangePasswordModal from "./ChangePasswordModal";
 
 const { Header, Content, Footer } = Layout;
 
@@ -18,9 +25,11 @@ const menuItems = [
 export default function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
+  const [pwdModalOpen, setPwdModalOpen] = useState(false);
+
+  const username = getStoredUsername() || "admin";
 
   // "添加文章" uses a drawer overlay on HomePage instead of a separate page.
-  // Navigate to "/" and use a query flag to signal the drawer should open.
   const handleMenuClick = ({ key }: { key: string }) => {
     if (key === "/add") {
       navigate("/?drawer=add", { replace: true });
@@ -28,6 +37,27 @@ export default function AppLayout() {
       navigate(key);
     }
   };
+
+  // User dropdown menu
+  const userMenuItems: MenuProps["items"] = [
+    {
+      key: "change-password",
+      icon: <LockOutlined />,
+      label: "修改密码",
+      onClick: () => setPwdModalOpen(true),
+    },
+    { type: "divider" },
+    {
+      key: "logout",
+      icon: <LogoutOutlined />,
+      label: "退出登录",
+      danger: true,
+      onClick: () => {
+        clearToken();
+        navigate("/login", { replace: true });
+      },
+    },
+  ];
 
   // Keep "添加文章" highlighted when drawer query is active
   const selectedKey =
@@ -59,6 +89,15 @@ export default function AppLayout() {
           onClick={handleMenuClick}
           style={{ flex: 1 }}
         />
+        <Dropdown menu={{ items: userMenuItems }} placement="bottomRight">
+          <Button
+            type="text"
+            style={{ color: "#fff", display: "flex", alignItems: "center", gap: 4 }}
+          >
+            <UserOutlined />
+            {username}
+          </Button>
+        </Dropdown>
       </Header>
       <Content style={{ padding: "24px 48px" }}>
         <Outlet />
@@ -66,6 +105,12 @@ export default function AppLayout() {
       <Footer style={{ textAlign: "center" }}>
         Reading Brain ©2026 — 轻量版 Readwise / 第二大脑
       </Footer>
+
+      {/* Change password modal */}
+      <ChangePasswordModal
+        open={pwdModalOpen}
+        onClose={() => setPwdModalOpen(false)}
+      />
     </Layout>
   );
 }

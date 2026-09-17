@@ -1,5 +1,7 @@
 """Application configuration loaded from .env."""
 
+import secrets
+
 from pydantic_settings import BaseSettings
 
 
@@ -12,6 +14,9 @@ class Settings(BaseSettings):
     volcano_api_key: str = ""
     volcano_model_id: str = ""
     volcano_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
+
+    # JWT authentication
+    jwt_secret_key: str = secrets.token_urlsafe(32)
 
     app_host: str = "127.0.0.1"
     app_port: int = 8000

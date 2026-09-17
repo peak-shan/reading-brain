@@ -1,5 +1,5 @@
 /**
- * API request layer — axios instance + articleApi / tagApi namespaces.
+ * API request layer — axios instance + auth / article / tag namespaces.
  *
  * All functions return the unwrapped response data.
  * Errors are thrown as AxiosError for the caller to handle.
@@ -21,6 +21,31 @@ import type {
 } from "../types";
 
 // ---------------------------------------------------------------------------
+// Token helpers
+// ---------------------------------------------------------------------------
+
+const TOKEN_KEY = "reading_brain_token";
+const USERNAME_KEY = "reading_brain_username";
+
+export function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function setToken(token: string, username: string): void {
+  localStorage.setItem(TOKEN_KEY, token);
+  localStorage.setItem(USERNAME_KEY, username);
+}
+
+export function clearToken(): void {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(USERNAME_KEY);
+}
+
+export function getStoredUsername(): string | null {
+  return localStorage.getItem(USERNAME_KEY);
+}
+
+// ---------------------------------------------------------------------------
 // Axios instance
 // ---------------------------------------------------------------------------
 
@@ -30,10 +55,28 @@ const api = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
-// Global error interceptor — add context for network errors
+// Request interceptor — attach Bearer token
+api.interceptors.request.use((config) => {
+  const token = getToken();
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// Response interceptor — add context for network errors, handle 401
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    // 401 → clear token and redirect to login
+    if (error.response?.status === 401) {
+      clearToken();
+      // Only redirect if not already on /login
+      if (window.location.pathname !== "/login") {
+        window.location.href = "/login";
+      }
+    }
+
     if (!error.response) {
       // Network error (no response from server)
       if (error.code === "ECONNABORTED") {
@@ -61,6 +104,30 @@ export async function fetchHealth(): Promise<HealthCheck> {
   const { data } = await api.get<HealthCheck>("/health");
   return data;
 }
+
+// ---------------------------------------------------------------------------
+// authApi
+// ---------------------------------------------------------------------------
+
+export const authApi = {
+  /** POST /api/auth/login — verify credentials, return JWT token */
+  login(username: string, password: string): Promise<{ token: string; username: string }> {
+    return api.post("/auth/login", { username, password }).then((r) => r.data);
+  },
+
+  /** POST /api/auth/change-password — change admin password (requires auth) */
+  changePassword(oldPassword: string, newPassword: string): Promise<{ message: string }> {
+    return api.post("/auth/change-password", {
+      old_password: oldPassword,
+      new_password: newPassword,
+    }).then((r) => r.data);
+  },
+
+  /** GET /api/auth/me — get current user info (requires auth) */
+  getMe(): Promise<{ username: string }> {
+    return api.get("/auth/me").then((r) => r.data);
+  },
+};
 
 // ---------------------------------------------------------------------------
 // articleApi
