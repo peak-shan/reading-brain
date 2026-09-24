@@ -99,7 +99,7 @@ export default function AppLayout() {
             label: "子账号管理",
             onClick: handleOpenUsersModal,
           },
-          { type: "divider" },
+          { type: "divider" } as const,
         ]
       : []),
     {
@@ -108,7 +108,7 @@ export default function AppLayout() {
       label: "修改密码",
       onClick: () => setPwdModalOpen(true),
     },
-    { type: "divider" },
+    { type: "divider" } as const,
     {
       key: "logout",
       icon: <LogoutOutlined />,
