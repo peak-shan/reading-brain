@@ -26,23 +26,34 @@ import type {
 
 const TOKEN_KEY = "reading_brain_token";
 const USERNAME_KEY = "reading_brain_username";
+const ROLE_KEY = "reading_brain_role";
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }
 
-export function setToken(token: string, username: string): void {
+export function setToken(token: string, username: string, role: string): void {
   localStorage.setItem(TOKEN_KEY, token);
   localStorage.setItem(USERNAME_KEY, username);
+  localStorage.setItem(ROLE_KEY, role);
 }
 
 export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USERNAME_KEY);
+  localStorage.removeItem(ROLE_KEY);
 }
 
 export function getStoredUsername(): string | null {
   return localStorage.getItem(USERNAME_KEY);
+}
+
+export function getStoredRole(): string | null {
+  return localStorage.getItem(ROLE_KEY);
+}
+
+export function isAdmin(): boolean {
+  return getStoredRole() === "admin";
 }
 
 // ---------------------------------------------------------------------------
@@ -106,16 +117,28 @@ export async function fetchHealth(): Promise<HealthCheck> {
 }
 
 // ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export interface User {
+  id: number;
+  username: string;
+  role: "admin" | "sub";
+  created_by: string | null;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
 // authApi
 // ---------------------------------------------------------------------------
 
 export const authApi = {
   /** POST /api/auth/login — verify credentials, return JWT token */
-  login(username: string, password: string): Promise<{ token: string; username: string }> {
+  login(username: string, password: string): Promise<{ token: string; username: string; role: string }> {
     return api.post("/auth/login", { username, password }).then((r) => r.data);
   },
 
-  /** POST /api/auth/change-password — change admin password (requires auth) */
+  /** POST /api/auth/change-password — change current user's password (requires auth) */
   changePassword(oldPassword: string, newPassword: string): Promise<{ message: string }> {
     return api.post("/auth/change-password", {
       old_password: oldPassword,
@@ -124,8 +147,25 @@ export const authApi = {
   },
 
   /** GET /api/auth/me — get current user info (requires auth) */
-  getMe(): Promise<{ username: string }> {
+  getMe(): Promise<{ username: string; role: string }> {
     return api.get("/auth/me").then((r) => r.data);
+  },
+
+  // ---- User management (admin only) ----
+
+  /** POST /api/auth/users — create a sub-account */
+  createUser(username: string, password: string): Promise<User> {
+    return api.post("/auth/users", { username, password }).then((r) => r.data);
+  },
+
+  /** GET /api/auth/users — list all users */
+  listUsers(): Promise<User[]> {
+    return api.get("/auth/users").then((r) => r.data);
+  },
+
+  /** DELETE /api/auth/users/:username — delete a sub-account */
+  deleteUser(username: string): Promise<{ message: string }> {
+    return api.delete(`/auth/users/${username}`).then((r) => r.data);
   },
 };
 

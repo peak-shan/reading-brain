@@ -20,10 +20,24 @@ init_db()
 app = FastAPI(
     title="Reading Brain API",
     description="轻量版 Readwise / 第二大脑 — AI 稍后读 + 个人知识库",
-    version="0.3.0",
+    version="0.4.0",
 )
 
-# Register routers
+
+# ---------------------------------------------------------------------------
+# Health check — must be registered FIRST, before catch-all SPA route
+# ---------------------------------------------------------------------------
+
+@app.get("/api/health")
+def health_check():
+    """Health check endpoint — public, no auth required."""
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Register API routers
+# ---------------------------------------------------------------------------
+
 from app.routers.auth import router as auth_router
 from app.routers.articles import router as articles_router
 from app.routers.tags import router as tags_router
@@ -63,8 +77,9 @@ if _FRONTEND_DIST.is_dir():
 
 
 # ---------------------------------------------------------------------------
-# Public paths (no auth required)
+# Auth middleware (after all routes are registered)
 # ---------------------------------------------------------------------------
+
 _PUBLIC_PATHS = {
     "/api/health",
     "/api/auth/login",
@@ -113,9 +128,3 @@ async def auth_middleware(request: Request, call_next):
         )
 
     return await call_next(request)
-
-
-@app.get("/api/health")
-def health_check():
-    """Health check endpoint — public, no auth required."""
-    return {"status": "ok"}

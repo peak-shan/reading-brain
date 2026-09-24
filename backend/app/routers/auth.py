@@ -1,4 +1,4 @@
-"""Authentication API — login, change password, get current user."""
+"""Authentication API — login, change password, user management."""
 
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException
@@ -10,6 +10,8 @@ from app.auth import (
     verify_password,
     create_access_token,
     get_current_user,
+    require_admin,
+    CurrentUser,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -27,6 +29,7 @@ class LoginRequest(BaseModel):
 class LoginResponse(BaseModel):
     token: str
     username: str
+    role: str
 
 
 class ChangePasswordRequest(BaseModel):
@@ -36,6 +39,20 @@ class ChangePasswordRequest(BaseModel):
 
 class UserInfo(BaseModel):
     username: str
+    role: str
+
+
+class CreateUserRequest(BaseModel):
+    username: str
+    password: str
+
+
+class UserInfoResponse(BaseModel):
+    id: int
+    username: str
+    role: str
+    created_by: str | None
+    created_at: str
 
 
 # ---------------------------------------------------------------------------
@@ -45,55 +62,43 @@ class UserInfo(BaseModel):
 @router.post("/login", response_model=LoginResponse)
 def login(req: LoginRequest, db=Depends(get_db)):
     """Verify username/password and return a JWT token."""
+    # Query users table
     row = db.execute(
-        text("SELECT value FROM app_settings WHERE key = :k"),
-        {"k": "admin_username"},
+        text("SELECT id, username, password_hash, salt, role FROM users WHERE username = :u"),
+        {"u": req.username},
     ).fetchone()
 
-    if not row or row[0] != req.username:
+    if not row:
         raise HTTPException(status_code=401, detail="用户名或密码错误")
 
-    # Fetch stored hash and salt
-    hash_row = db.execute(
-        text("SELECT value FROM app_settings WHERE key = :k"),
-        {"k": "admin_password_hash"},
-    ).fetchone()
-    salt_row = db.execute(
-        text("SELECT value FROM app_settings WHERE key = :k"),
-        {"k": "admin_salt"},
-    ).fetchone()
+    _, username, password_hash, salt, role = row
 
-    if not hash_row or not salt_row:
-        raise HTTPException(status_code=500, detail="认证配置异常")
-
-    if not verify_password(req.password, hash_row[0], salt_row[0]):
+    if not verify_password(req.password, password_hash, salt):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
 
-    token = create_access_token(req.username)
-    return LoginResponse(token=token, username=req.username)
+    token = create_access_token(username, role)
+    return LoginResponse(token=token, username=username, role=role)
 
 
 @router.post("/change-password")
 def change_password(
     req: ChangePasswordRequest,
     db=Depends(get_db),
-    _user: str = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
-    """Change the admin password. Requires valid token."""
-    # Verify old password
-    hash_row = db.execute(
-        text("SELECT value FROM app_settings WHERE key = :k"),
-        {"k": "admin_password_hash"},
-    ).fetchone()
-    salt_row = db.execute(
-        text("SELECT value FROM app_settings WHERE key = :k"),
-        {"k": "admin_salt"},
+    """Change the current user's password. Requires valid token."""
+    # Fetch current user's hash and salt
+    row = db.execute(
+        text("SELECT password_hash, salt FROM users WHERE username = :u"),
+        {"u": current_user.username},
     ).fetchone()
 
-    if not hash_row or not salt_row:
-        raise HTTPException(status_code=500, detail="认证配置异常")
+    if not row:
+        raise HTTPException(status_code=500, detail="用户数据异常")
 
-    if not verify_password(req.old_password, hash_row[0], salt_row[0]):
+    password_hash, salt = row
+
+    if not verify_password(req.old_password, password_hash, salt):
         raise HTTPException(status_code=400, detail="原密码错误")
 
     if len(req.new_password) < 6:
@@ -102,12 +107,8 @@ def change_password(
     # Hash and store new password
     new_hash, new_salt = hash_password(req.new_password)
     db.execute(
-        text("UPDATE app_settings SET value = :v WHERE key = :k"),
-        {"v": new_hash, "k": "admin_password_hash"},
-    )
-    db.execute(
-        text("UPDATE app_settings SET value = :v WHERE key = :k"),
-        {"v": new_salt, "k": "admin_salt"},
+        text("UPDATE users SET password_hash = :h, salt = :s WHERE username = :u"),
+        {"h": new_hash, "s": new_salt, "u": current_user.username},
     )
     db.commit()
 
@@ -115,6 +116,102 @@ def change_password(
 
 
 @router.get("/me", response_model=UserInfo)
-def get_me(_user: str = Depends(get_current_user)):
+def get_me(current_user: CurrentUser = Depends(get_current_user)):
     """Return the current authenticated user."""
-    return UserInfo(username=_user)
+    return UserInfo(username=current_user.username, role=current_user.role)
+
+
+# ---------------------------------------------------------------------------
+# User management (admin only)
+# ---------------------------------------------------------------------------
+
+@router.post("/users", response_model=UserInfoResponse)
+def create_user(
+    req: CreateUserRequest,
+    db=Depends(get_db),
+    current_user: CurrentUser = Depends(require_admin),
+):
+    """Create a new sub-account. Admin only."""
+    # Validate username
+    if len(req.username) < 3 or len(req.username) > 20:
+        raise HTTPException(status_code=400, detail="用户名需要 3-20 个字符")
+
+    if req.username == "admin":
+        raise HTTPException(status_code=400, detail="不能使用 admin 作为子账号用户名")
+
+    # Check if username already exists
+    existing = db.execute(
+        text("SELECT id FROM users WHERE username = :u"),
+        {"u": req.username},
+    ).fetchone()
+    if existing:
+        raise HTTPException(status_code=400, detail="用户名已存在")
+
+    if len(req.password) < 6:
+        raise HTTPException(status_code=400, detail="密码至少需要 6 个字符")
+
+    # Hash password and insert
+    hashed, salt = hash_password(req.password)
+    result = db.execute(
+        text("""
+            INSERT INTO users (username, password_hash, salt, role, created_by)
+            VALUES (:username, :hash, :salt, :role, :created_by)
+        """),
+        {"username": req.username, "hash": hashed, "salt": salt, "role": "sub", "created_by": current_user.username},
+    )
+    db.commit()
+
+    # Fetch the created user
+    row = db.execute(
+        text("SELECT id, username, role, created_by, created_at FROM users WHERE id = :id"),
+        {"id": result.lastrowid},
+    ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=500, detail="创建失败")
+
+    user_id, username, role, created_by, created_at = row
+    return UserInfoResponse(id=user_id, username=username, role=role, created_by=created_by, created_at=created_at)
+
+
+@router.get("/users", response_model=list[UserInfoResponse])
+def list_users(
+    db=Depends(get_db),
+    current_user: CurrentUser = Depends(require_admin),
+):
+    """List all users. Admin only."""
+    rows = db.execute(
+        text("SELECT id, username, role, created_by, created_at FROM users ORDER BY id"),
+    ).fetchall()
+
+    return [
+        UserInfoResponse(id=r[0], username=r[1], role=r[2], created_by=r[3], created_at=r[4])
+        for r in rows
+    ]
+
+
+@router.delete("/users/{username}")
+def delete_user(
+    username: str,
+    db=Depends(get_db),
+    current_user: CurrentUser = Depends(require_admin),
+):
+    """Delete a sub-account. Admin only. Cannot delete admin account."""
+    if username == "admin":
+        raise HTTPException(status_code=400, detail="不能删除管理员账号")
+
+    row = db.execute(
+        text("SELECT id FROM users WHERE username = :u"),
+        {"u": username},
+    ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    db.execute(
+        text("DELETE FROM users WHERE username = :u"),
+        {"u": username},
+    )
+    db.commit()
+
+    return {"message": f"用户 {username} 已删除"}

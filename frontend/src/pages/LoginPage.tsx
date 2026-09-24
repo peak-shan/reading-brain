@@ -22,7 +22,7 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const res = await authApi.login(values.username, values.password);
-      setToken(res.token, res.username);
+      setToken(res.token, res.username, res.role);
       message.success("登录成功");
       navigate("/", { replace: true });
     } catch (err: unknown) {
